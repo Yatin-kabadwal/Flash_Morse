@@ -1,15 +1,16 @@
 package com.flashlight.torch.viewmodel
 
-import android.Manifest
 import android.app.Application
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.hardware.camera2.CameraManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.BatteryManager
-import androidx.annotation.RequiresPermission
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -49,10 +50,13 @@ class FlashlightViewModel(application: Application) : AndroidViewModel(applicati
     private val _state = MutableStateFlow(FlashlightState())
     val state: StateFlow<FlashlightState> = _state
 
-    private var strobeJob: Job? = null
-    private var morseJob:  Job? = null
-    private var soundJob:  Job? = null
+    private var strobeJob:  Job? = null
+    private var morseJob:   Job? = null
+    private var soundJob:   Job? = null
     private var audioRecord: AudioRecord? = null
+
+    // ── Battery receiver for live monitoring ──
+    private var batteryReceiver: BroadcastReceiver? = null
 
     init {
         val hasFlash = context.packageManager
@@ -60,13 +64,58 @@ class FlashlightViewModel(application: Application) : AndroidViewModel(applicati
         cameraId = try {
             cameraManager.cameraIdList.firstOrNull()
         } catch (e: Exception) { null }
-        updateBattery()
+
         _state.value = _state.value.copy(hasFlash = hasFlash)
+        updateBattery()
+    }
+
+    // ────────────────────────────────────────────
+    // BATTERY — Live monitoring via BroadcastReceiver
+    // ────────────────────────────────────────────
+
+    fun startBatteryMonitoring() {
+        batteryReceiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: Intent) {
+                val level   = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+                val scale   = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+                val percent = if (level >= 0 && scale > 0)
+                    (level * 100 / scale) else 0
+                val status     = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+                val isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                        status == BatteryManager.BATTERY_STATUS_FULL
+                _state.value = _state.value.copy(
+                    batteryLevel    = percent,
+                    batteryCharging = isCharging
+                )
+            }
+        }
+        val filter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+        context.registerReceiver(batteryReceiver, filter)
+    }
+
+    fun stopBatteryMonitoring() {
+        try {
+            batteryReceiver?.let { context.unregisterReceiver(it) }
+        } catch (e: Exception) { }
+        batteryReceiver = null
+    }
+
+    fun updateBattery() {
+        try {
+            val bm = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+            val level      = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+            val isCharging = bm.isCharging
+            _state.value = _state.value.copy(
+                batteryLevel    = level,
+                batteryCharging = isCharging
+            )
+        } catch (e: Exception) { }
     }
 
     // ────────────────────────────────────────────
     // MAIN TOGGLE
     // ────────────────────────────────────────────
+
     fun toggleFlashlight() {
         if (_state.value.isOn) turnOff() else turnOn()
     }
@@ -81,10 +130,10 @@ class FlashlightViewModel(application: Application) : AndroidViewModel(applicati
         stopAllJobs()
         setFlash(false)
         _state.value = _state.value.copy(
-            isOn          = false,
-            mode          = FlashMode.OFF,
+            isOn           = false,
+            mode           = FlashMode.OFF,
             isMorsePlaying = false,
-            breathPhase   = "",
+            breathPhase    = "",
             breathProgress = 0f
         )
     }
@@ -92,6 +141,7 @@ class FlashlightViewModel(application: Application) : AndroidViewModel(applicati
     // ────────────────────────────────────────────
     // STROBE MODE
     // ────────────────────────────────────────────
+
     fun startStrobe() {
         stopAllJobs()
         _state.value = _state.value.copy(isOn = true, mode = FlashMode.STROBE)
@@ -113,6 +163,7 @@ class FlashlightViewModel(application: Application) : AndroidViewModel(applicati
     // ────────────────────────────────────────────
     // SOS MODE
     // ────────────────────────────────────────────
+
     fun startSOS() {
         stopAllJobs()
         _state.value = _state.value.copy(isOn = true, mode = FlashMode.SOS)
@@ -133,15 +184,16 @@ class FlashlightViewModel(application: Application) : AndroidViewModel(applicati
     // ────────────────────────────────────────────
     // MORSE CODE
     // ────────────────────────────────────────────
+
     fun playMorse(text: String) {
         if (text.isBlank()) return
         stopMorse()
         _state.value = _state.value.copy(isMorsePlaying = true, mode = FlashMode.MORSE)
         morseJob = viewModelScope.launch {
-            val morse   = textToMorse(text.uppercase())
-            val dot     = 120L
-            val dash    = 360L
-            val gap     = 120L
+            val morse     = textToMorse(text.uppercase())
+            val dot       = 120L
+            val dash      = 360L
+            val gap       = 120L
             val letterGap = 360L
             val wordGap   = 840L
 
@@ -156,8 +208,8 @@ class FlashlightViewModel(application: Application) : AndroidViewModel(applicati
             setFlash(false)
             _state.value = _state.value.copy(
                 isMorsePlaying = false,
-                mode = FlashMode.OFF,
-                isOn = false
+                mode           = FlashMode.OFF,
+                isOn           = false
             )
         }
     }
@@ -174,9 +226,8 @@ class FlashlightViewModel(application: Application) : AndroidViewModel(applicati
 
     // ────────────────────────────────────────────
     // SOUND REACTIVE MODE
-    // Flash reacts to music / sound via mic
     // ────────────────────────────────────────────
-    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+
     fun startSoundReactive() {
         stopAllJobs()
         _state.value = _state.value.copy(isOn = true, mode = FlashMode.SOUND)
@@ -239,8 +290,8 @@ class FlashlightViewModel(application: Application) : AndroidViewModel(applicati
 
     // ────────────────────────────────────────────
     // BREATHING GUIDE MODE
-    // Flash guides breathing rhythm
     // ────────────────────────────────────────────
+
     fun startBreathing(
         inhaleMs: Long = 4000L,
         holdMs:   Long = 1500L,
@@ -248,9 +299,9 @@ class FlashlightViewModel(application: Application) : AndroidViewModel(applicati
     ) {
         stopAllJobs()
         _state.value = _state.value.copy(
-            isOn          = true,
-            mode          = FlashMode.BREATHING,
-            breathPhase   = "Get Ready...",
+            isOn           = true,
+            mode           = FlashMode.BREATHING,
+            breathPhase    = "Get Ready...",
             breathProgress = 0f
         )
         strobeJob = viewModelScope.launch {
@@ -306,9 +357,9 @@ class FlashlightViewModel(application: Application) : AndroidViewModel(applicati
         strobeJob?.cancel(); strobeJob = null
         setFlash(false)
         _state.value = _state.value.copy(
-            isOn          = false,
-            mode          = FlashMode.OFF,
-            breathPhase   = "",
+            isOn           = false,
+            mode           = FlashMode.OFF,
+            breathPhase    = "",
             breathProgress = 0f
         )
     }
@@ -316,6 +367,7 @@ class FlashlightViewModel(application: Application) : AndroidViewModel(applicati
     // ────────────────────────────────────────────
     // SCREEN LIGHT
     // ────────────────────────────────────────────
+
     fun toggleScreenLight() {
         _state.value = _state.value.copy(
             screenLightOn = !_state.value.screenLightOn
@@ -327,21 +379,9 @@ class FlashlightViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     // ────────────────────────────────────────────
-    // BATTERY
-    // ────────────────────────────────────────────
-    fun updateBattery() {
-        try {
-            val bm = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
-            _state.value = _state.value.copy(
-                batteryLevel    = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY),
-                batteryCharging = bm.isCharging
-            )
-        } catch (e: Exception) { }
-    }
-
-    // ────────────────────────────────────────────
     // HELPERS
     // ────────────────────────────────────────────
+
     private suspend fun flash(onMs: Long, offMs: Long) {
         setFlash(true);  delay(onMs)
         setFlash(false); delay(offMs)
@@ -378,12 +418,12 @@ class FlashlightViewModel(application: Application) : AndroidViewModel(applicati
             '6' to "-....", '7' to "--...", '8' to "---..",
             '9' to "----.", ' ' to "/"
         )
-        return text.mapNotNull { map[it] }
-            .joinToString(" ")
+        return text.mapNotNull { map[it] }.joinToString(" ")
     }
 
     override fun onCleared() {
         super.onCleared()
+        stopBatteryMonitoring()
         stopAllJobs()
         setFlash(false)
     }
