@@ -1,5 +1,6 @@
 package com.flashlight.torch.ui.screens
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -34,16 +35,17 @@ import com.flashlight.torch.utils.BannerAd
 import com.flashlight.torch.viewmodel.FlashMode
 import com.flashlight.torch.viewmodel.FlashlightViewModel
 
+@SuppressLint("MissingPermission")
 @Composable
 fun MainScreen(
-    vm: FlashlightViewModel = viewModel()   // ← no Activity param — fixes composable error
+    vm: FlashlightViewModel = viewModel()
 ) {
     val state   by vm.state.collectAsStateWithLifecycle()
-    val context = LocalContext.current          // ← get context here inside composable
-    val activity = context as? Activity         // ← cast to Activity safely
+    val context = LocalContext.current
+    val activity = context as? Activity
 
-    var selectedTab     by remember { mutableStateOf(0) }
-    var modeChangeCount by remember { mutableStateOf(0) }
+    var selectedTab     by remember { mutableIntStateOf(0) }
+    var modeChangeCount by remember { mutableIntStateOf(0) }
 
     // Live battery monitoring
     DisposableEffect(Unit) {
@@ -62,7 +64,7 @@ fun MainScreen(
     }
 
     // Show interstitial when torch turned off after 60s of use
-    var torchOnTime by remember { mutableStateOf(0L) }
+    var torchOnTime by remember { mutableLongStateOf(0L) }
     LaunchedEffect(state.isOn) {
         if (state.isOn) {
             torchOnTime = System.currentTimeMillis()
@@ -914,7 +916,34 @@ fun BreathingPanel(
     isActive: Boolean, breathPhase: String, breathProgress: Float,
     onStart: () -> Unit, onStop: () -> Unit
 ) {
-    val teal = Color(0xFF00CED1)
+    val teal    = Color(0xFF00CED1)
+    val tealDim = Color(0xFF007A80)
+
+    // Smoothly animate the progress so the circle grows fluidly
+    val animatedProgress by animateFloatAsState(
+        targetValue   = breathProgress,
+        animationSpec = tween(300, easing = EaseInOut),
+        label         = "breathCircle"
+    )
+
+    // Subtle ambient glow pulse when active
+    val infiniteAnim = rememberInfiniteTransition(label = "breathGlow")
+    val glowAlpha by infiniteAnim.animateFloat(
+        initialValue  = 0.2f, targetValue = 0.55f,
+        animationSpec = infiniteRepeatable(
+            tween(1400, easing = EaseInOut), RepeatMode.Reverse
+        ), label = "ba"
+    )
+
+    // Color shifts per phase so user gets an additional visual cue
+    val phaseColor = when (breathPhase) {
+        "Inhale" -> teal
+        "Hold"   -> Color(0xFF88FFDD)
+        "Exhale" -> Color(0xFF0099AA)
+        "Rest"   -> tealDim
+        else     -> teal.copy(alpha = 0.5f)  // "Get Ready..."
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -922,13 +951,192 @@ fun BreathingPanel(
             .background(Brush.linearGradient(listOf(Color(0xFF001A1A), Color(0xFF000D10))))
             .border(1.dp, teal.copy(0.25f), RoundedCornerShape(24.dp))
             .padding(22.dp),
-        verticalArrangement   = Arrangement.spacedBy(18.dp),
-        horizontalAlignment   = Alignment.CenterHorizontally
+        verticalArrangement = Arrangement.spacedBy(18.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text("Breathing Guide", color = Color.White,
-            fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
-        Text("Calm & focus with light patterns",
-            color = Color.White.copy(0.4f), fontSize = 12.sp)
+
+        // ── Header ──
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment     = Alignment.CenterVertically
+        ) {
+            Column {
+                Text("Breathing Guide", color = Color.White,
+                    fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
+                Text("Calm & focus with light patterns",
+                    color = Color.White.copy(0.4f), fontSize = 12.sp)
+            }
+            if (isActive) {
+                Surface(
+                    shape  = RoundedCornerShape(20.dp),
+                    color  = teal.copy(0.15f),
+                    border = BorderStroke(1.dp, teal.copy(0.5f))
+                ) {
+                    Text("LIVE",
+                        modifier   = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        color      = teal,
+                        fontSize   = 11.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 2.sp)
+                }
+            }
+        }
+
+        // ── Visual: animated circle when active, timing hint when idle ──
+        if (isActive) {
+
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(200.dp)
+            ) {
+                // Outer ambient glow — expands with progress
+                Box(
+                    modifier = Modifier
+                        .size((140 + animatedProgress * 40).dp)
+                        .clip(CircleShape)
+                        .background(
+                            Brush.radialGradient(
+                                listOf(
+                                    teal.copy(glowAlpha * animatedProgress),
+                                    Color.Transparent
+                                )
+                            )
+                        )
+                        .blur(24.dp)
+                )
+
+                // Static outer guide ring
+                Box(
+                    modifier = Modifier
+                        .size(160.dp)
+                        .clip(CircleShape)
+                        .border(1.dp, teal.copy(0.15f), CircleShape)
+                )
+
+                // Main animated fill circle — grows inhale, shrinks exhale
+                Box(
+                    modifier = Modifier
+                        .size((80 + animatedProgress * 70).dp)
+                        .clip(CircleShape)
+                        .background(
+                            Brush.radialGradient(
+                                listOf(
+                                    phaseColor.copy(0.55f),
+                                    phaseColor.copy(0.2f),
+                                    Color.Transparent
+                                )
+                            )
+                        )
+                        .border(
+                            2.dp,
+                            phaseColor.copy(0.7f + animatedProgress * 0.3f),
+                            CircleShape
+                        )
+                )
+
+                // Phase label + percentage inside the circle
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        breathPhase,
+                        color         = Color.White,
+                        fontSize      = 16.sp,
+                        fontWeight    = FontWeight.ExtraBold,
+                        letterSpacing = 2.sp,
+                        textAlign     = TextAlign.Center
+                    )
+                    if (breathPhase != "Get Ready...") {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "${(animatedProgress * 100).toInt()}%",
+                            color      = phaseColor,
+                            fontSize   = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+
+            // ── Phase tracker: Inhale · Hold · Exhale · Rest ──
+            Row(
+                modifier              = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment     = Alignment.CenterVertically
+            ) {
+                listOf("Inhale", "Hold", "Exhale", "Rest").forEachIndexed { i, label ->
+                    val isCurrentPhase = breathPhase == label
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier            = Modifier.padding(horizontal = 10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(if (isCurrentPhase) 8.dp else 5.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (isCurrentPhase) teal else teal.copy(0.2f)
+                                )
+                        )
+                        Text(
+                            label,
+                            color      = if (isCurrentPhase) teal else Color.White.copy(0.2f),
+                            fontSize   = 9.sp,
+                            fontWeight = if (isCurrentPhase) FontWeight.ExtraBold
+                            else FontWeight.Normal,
+                            letterSpacing = 1.sp
+                        )
+                    }
+                    // Connector line between dots
+                    if (i < 3) {
+                        Box(
+                            modifier = Modifier
+                                .width(16.dp)
+                                .height(1.dp)
+                                .background(teal.copy(0.15f))
+                        )
+                    }
+                }
+            }
+
+        } else {
+            // Idle hint — shows the 4s · 1.5s · 4s timing so user knows what to expect
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(100.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(teal.copy(0.05f))
+                    .border(1.dp, teal.copy(0.1f), RoundedCornerShape(16.dp))
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        "4s · 1.5s · 4s",
+                        color         = teal.copy(0.6f),
+                        fontSize      = 20.sp,
+                        fontWeight    = FontWeight.ExtraBold,
+                        letterSpacing = 3.sp
+                    )
+                    Text(
+                        "Inhale · Hold · Exhale",
+                        color         = Color.White.copy(0.25f),
+                        fontSize      = 11.sp,
+                        letterSpacing = 2.sp
+                    )
+                }
+            }
+        }
+
+        // ── Start / Stop button ──
         Button(
             onClick  = if (isActive) onStop else onStart,
             modifier = Modifier.fillMaxWidth().height(56.dp),
@@ -936,11 +1144,17 @@ fun BreathingPanel(
             colors   = ButtonDefaults.buttonColors(
                 containerColor = if (isActive) RedSOS else teal)
         ) {
-            Icon(if (isActive) Icons.Filled.Stop else Icons.Filled.Air,
-                null, modifier = Modifier.size(22.dp))
+            Icon(
+                if (isActive) Icons.Filled.Stop else Icons.Filled.Air,
+                null,
+                modifier = Modifier.size(22.dp)
+            )
             Spacer(Modifier.width(10.dp))
-            Text(if (isActive) "Stop Breathing" else "Start Breathing Guide",
-                fontWeight = FontWeight.ExtraBold, fontSize = 15.sp)
+            Text(
+                if (isActive) "Stop Breathing" else "Start Breathing Guide",
+                fontWeight = FontWeight.ExtraBold,
+                fontSize   = 15.sp
+            )
         }
     }
 }

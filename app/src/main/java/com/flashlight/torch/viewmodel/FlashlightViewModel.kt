@@ -1,5 +1,6 @@
 package com.flashlight.torch.viewmodel
 
+import android.Manifest
 import android.app.Application
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -11,6 +12,7 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.BatteryManager
+import androidx.annotation.RequiresPermission
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
@@ -61,8 +63,15 @@ class FlashlightViewModel(application: Application) : AndroidViewModel(applicati
     init {
         val hasFlash = context.packageManager
             .hasSystemFeature(PackageManager.FEATURE_CAMERA_FLASH)
+
         cameraId = try {
-            cameraManager.cameraIdList.firstOrNull()
+            cameraManager.cameraIdList.firstOrNull { id ->
+                val characteristics = cameraManager.getCameraCharacteristics(id)
+                val flashAvailable = characteristics.get(
+                    android.hardware.camera2.CameraCharacteristics.FLASH_INFO_AVAILABLE
+                ) == true
+                flashAvailable
+            }
         } catch (e: Exception) { null }
 
         _state.value = _state.value.copy(hasFlash = hasFlash)
@@ -228,6 +237,7 @@ class FlashlightViewModel(application: Application) : AndroidViewModel(applicati
     // SOUND REACTIVE MODE
     // ────────────────────────────────────────────
 
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     fun startSoundReactive() {
         stopAllJobs()
         _state.value = _state.value.copy(isOn = true, mode = FlashMode.SOUND)
@@ -334,13 +344,15 @@ class FlashlightViewModel(application: Application) : AndroidViewModel(applicati
                     breathPhase = "Exhale", breathProgress = 1f
                 )
                 val exhaleSteps = 12
+                val exhaleStepMs = exhaleMs / exhaleSteps          // 333ms per step
                 repeat(exhaleSteps) { i ->
                     _state.value = _state.value.copy(
                         breathProgress = 1f - (i.toFloat() / exhaleSteps)
                     )
-                    val onTime = ((exhaleSteps - i) * 30).toLong().coerceAtLeast(20L)
+                    val onTime = ((exhaleSteps - i) * 30).toLong()
+                        .coerceIn(20L, exhaleStepMs - 20L)         // never exceed the slot!
                     setFlash(true);  delay(onTime)
-                    setFlash(false); delay((exhaleMs / exhaleSteps) - onTime)
+                    setFlash(false); delay(exhaleStepMs - onTime)
                 }
                 setFlash(false)
 
@@ -388,10 +400,16 @@ class FlashlightViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private fun setFlash(on: Boolean) {
+        if (!_state.value.hasFlash) return
+
         try {
             val id = cameraId ?: return
             cameraManager.setTorchMode(id, on)
-        } catch (e: Exception) { }
+        } catch (e: Exception) {
+            _state.value = _state.value.copy(
+                errorMessage = "Flash not supported on this device"
+            )
+        }
     }
 
     private fun stopAllJobs() {

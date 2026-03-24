@@ -3,8 +3,7 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.CAMERA"/>
-    <uses-permission android:name="android.permission.FLASHLIGHT"/>
-    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+
 
     <uses-feature
         android:name="android.hardware.camera.flash"
@@ -27,6 +26,8 @@
         <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"
             android:value="ca-app-pub-5963680420417931~4575383526"/>
+
+
 
         <activity
             android:name=".MainActivity"
